@@ -1,5 +1,6 @@
 require 'helper'
 require 'net/http'
+require 'fluent/test/driver/input'
 
 class HerokuSyslogHttpInputTest < Test::Unit::TestCase
   class << self
@@ -28,7 +29,7 @@ class HerokuSyslogHttpInputTest < Test::Unit::TestCase
   ]
 
   def create_driver(conf=CONFIG)
-    Fluent::Test::InputTestDriver.new(Fluent::Plugin::HerokuSyslogHttpInput).configure(conf)
+    Fluent::Test::Driver::Input.new(Fluent::Plugin::HerokuSyslogHttpInput).configure(conf)
   end
 
   def test_configure
@@ -47,140 +48,117 @@ class HerokuSyslogHttpInputTest < Test::Unit::TestCase
 
   def test_time_format
     d = create_driver
+    time_parser = Fluent::TimeParser.new
 
     tests = [
-      {
-          'msg' => "<13>1 2014-01-29T06:25:52.589365+00:00 host app web.1 - foo",
-          'expected' => 'foo',
-          'expected_time' => Time.strptime('2014-01-29T06:25:52+00:00', '%Y-%m-%dT%H:%M:%S%z').to_i
-      },
-      {
-          'msg' => "<13>1 2014-01-30T07:35:00.123456+09:00 host app web.1 - bar",
-          'expected' => 'bar',
-          'expected_time' => Time.strptime('2014-01-30T07:35:00+09:00', '%Y-%m-%dT%H:%M:%S%z').to_i
-      }
+      "59 <13>1 2014-01-29T06:25:52.589365+00:00 host app web.1 - foo",
+      "59 <13>1 2014-01-30T07:35:00.123456+09:00 host app web.1 - bar"
     ]
 
-    tests.each do |msg|
-      msg['msg'] = "#{msg['msg'].length} #{msg['msg']}"
+    d.run(expect_records: 2) do
+      res = post(tests)
+      assert_equal "200", res.code
     end
 
-    d.expect_emit 'heroku', tests[0]['expected_time'], {
+    assert_equal d.events[0], ['heroku', time_parser.parse('2014-01-29T06:25:52.589365+00:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident"=>"app",
       "pid"=>"web.1",
-      "message"=> "foo",
-      "pri" => "13",
-      "facility" => "user",
-      "priority" => "notice"
-    }
+      "message"=>"foo",
+      "facility"=>"user",
+      "priority"=>"notice"
+    }]
 
-    d.expect_emit 'heroku', tests[1]['expected_time'], {
+    assert_equal d.events[1], ['heroku', time_parser.parse('2014-01-30T07:35:00.123456+09:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident"=>"app",
       "pid"=>"web.1",
       "message"=> "bar",
-      "pri" => "13",
       "facility" => "user",
       "priority" => "notice"
-    }
-
-    d.run do
-      res = post(tests)
-      assert_equal "200", res.code
-    end
+    }]
   end
 
   def test_msg_size
     d = create_driver
-    tests = create_test_case
+    time_parser = Fluent::TimeParser.new
 
-    d.expect_emit 'heroku', tests[0]['expected_time'], {
+    tests = [
+      '156 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 100,
+      '1080 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 1024
+    ]
+
+    d.run(expect_records: 2) do
+      res = post(tests)
+      assert_equal "200", res.code
+    end
+
+    assert_equal d.events[0], ['heroku', time_parser.parse('2014-01-01T01:23:45.123456+00:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident" => "app",
       "pid" => "web.1",
       "message" => "x" * 100,
-      "pri" => "13",
       "facility" => "user",
       "priority" => "notice"
-    }
-    d.expect_emit 'heroku', tests[1]['expected_time'], {
+    }]
+
+    assert_equal d.events[1], ['heroku', time_parser.parse('2014-01-01T01:23:45.123456+00:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident" => "app",
       "pid" => "web.1",
       "message" => "x" * 1024,
-      "pri" => "13",
       "facility" => "user",
       "priority" => "notice"
-    }
-
-    d.run do
-      res = post(tests)
-      assert_equal "200", res.code
-    end
+    }]
   end
 
   def test_accept_matched_drain_id_multiple
     d = create_driver(CONFIG + "\ndrain_ids [\"abc\", \"d.fc6b856b-3332-4546-93de-7d0ee272c3bd\"]")
-    tests = create_test_case
+    time_parser = Fluent::TimeParser.new
 
-    d.expect_emit 'heroku', tests[0]['expected_time'], {
+    tests = [
+      '156 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 100,
+      '1080 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 1024
+    ]
+
+    d.run(expect_records: 2) do
+      res = post(tests)
+      assert_equal "200", res.code
+    end
+
+    assert_equal d.events[0], ['heroku', time_parser.parse('2014-01-01T01:23:45.123456+00:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident" => "app",
       "pid" => "web.1",
       "message" => "x" * 100,
-      "pri" => "13",
       "facility" => "user",
       "priority" => "notice"
-    }
-    d.expect_emit 'heroku', tests[1]['expected_time'], {
+    }]
+
+    assert_equal d.events[1], ['heroku', time_parser.parse('2014-01-01T01:23:45.123456+00:00'), {
       "drain_id" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "ident" => "app",
       "pid" => "web.1",
       "message" => "x" * 1024,
-      "pri" => "13",
       "facility" => "user",
       "priority" => "notice"
-    }
-
-    d.run do
-      res = post(tests)
-      assert_equal "200", res.code
-    end
+    }]
   end
 
   def test_ignore_unmatched_drain_id
     d = create_driver(CONFIG + "\ndrain_ids [\"abc\"]")
-    tests = create_test_case
 
-    d.run do
+    tests = [
+      '58 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - x',
+      '58 <13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - y'
+    ]
+
+    d.run(expect_records: 0) do
       res = post(tests)
       assert_equal "200", res.code
     end
 
-    assert_equal(0, d.emits.length)
-  end
-
-  def create_test_case
-    # actual syslog message has "\n"
-    msgs = [
-      {
-        'msg' => '<13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 100,
-        'expected' => 'x' * 100,
-        'expected_time' => Time.parse("2014-01-01T01:23:45 UTC").to_i
-      },
-      {
-        'msg' => '<13>1 2014-01-01T01:23:45.123456+00:00 host app web.1 - ' + 'x' * 1024,
-        'expected' => 'x' * 1024,
-        'expected_time' => Time.parse("2014-01-01T01:23:45 UTC").to_i
-      }
-    ]
-
-    msgs.each do |msg|
-      msg['msg'] = "#{msg['msg'].length} #{msg['msg']}"
-    end
-
-    msgs
+    assert_equal(0, d.events.length)
   end
 
   def post(messages)
@@ -193,7 +171,7 @@ class HerokuSyslogHttpInputTest < Test::Unit::TestCase
       "Logplex-Drain-Token" => "d.fc6b856b-3332-4546-93de-7d0ee272c3bd",
       "User-Agent" => "Logplex/v49"
     })
-    req.body = messages.map {|msg| msg['msg']}.join("\n")
+    req.body = messages.join("\n")
     http.request(req)
   end
 
